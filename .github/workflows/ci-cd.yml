@@ -1,0 +1,72 @@
+name: KYC CI/CD
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      request_deployment:
+        description: Request entry to the protected deployment placeholder
+        required: true
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: kyc-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  quality:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - run: python -m pip install --upgrade pip
+      - run: pip install -r requirements-dev.txt
+      - run: ruff check .
+      - run: ruff format --check .
+      - run: bandit -q -r src
+      - run: PYTHONPATH=src pytest -q
+      - run: pip-audit -r requirements.txt
+
+  image:
+    needs: quality
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: false
+          tags: kyc-api:${{ github.sha }}
+          load: true
+      - uses: aquasecurity/trivy-action@0.30.0
+        with:
+          image-ref: kyc-api:${{ github.sha }}
+          format: table
+          exit-code: "1"
+          ignore-unfixed: true
+          vuln-type: os,library
+          severity: CRITICAL,HIGH
+
+  deployment-gate:
+    if: github.event_name == 'workflow_dispatch' && inputs.request_deployment
+    needs: image
+    runs-on: ubuntu-latest
+    environment: production
+    permissions: {}
+    steps:
+      - name: Safe deployment placeholder
+        run: |
+          echo "Environment approval completed. No deployment was performed."
+          echo "Replace this step only with your approved deployment mechanism."
